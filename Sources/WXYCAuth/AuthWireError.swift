@@ -57,27 +57,30 @@ public enum AuthWireError: Error, Sendable {
 
 /// better-auth's error body, `{message, code}`.
 ///
+/// This is a **spelling** of the generated ``AuthErrorResponse``, not a second
+/// type: the package owns the auth wire schemas, so the shape is vendored from
+/// api.yaml rather than mirrored by hand. The alias survives because the name
+/// reads better where ``AuthWireError/status(_:body:)`` sends the caller, and
+/// the extension below is the reason it has to be an alias plus an extension
+/// rather than a bare `typealias` — a generated type can't carry a
+/// hand-written convenience initializer, but an extension on it can.
+///
 /// Note the vocabulary boundary: better-auth's own routes answer in this shape,
 /// while Backend-Service's custom routes and its Express rate limiter answer
 /// `{error: …}`, which this cannot decode at all. Callers on those paths map by
-/// status instead of reaching for this — `init?(decoding:)` returning `nil` is
+/// status instead of reaching for this — ``init(decoding:)`` returning `nil` is
 /// the expected outcome there, not a defect.
-public struct AuthWireErrorBody: Decodable, Sendable, Equatable {
-    /// Required, and that is what makes ``init(decoding:)`` discriminating:
-    /// a body in Backend-Service's `{error: …}` vocabulary has no `message` and
-    /// therefore fails to decode, rather than arriving as an all-`nil` value
-    /// that reads like a successfully-parsed better-auth error.
-    public let message: String
-    public let code: String?
+public typealias AuthWireErrorBody = AuthErrorResponse
 
-    public init(message: String, code: String?) {
-        self.message = message
-        self.code = code
-    }
-
+extension AuthErrorResponse {
     /// Decodes an error body, or `nil` if these bytes are not one.
+    ///
+    /// Discriminating because the schema declares `message` **required**: a body
+    /// in Backend-Service's `{error: …}` vocabulary has no `message` and so
+    /// fails to decode, rather than arriving as an all-`nil` value that reads
+    /// like a successfully-parsed better-auth error.
     public init?(decoding data: Data) {
-        guard let decoded = try? JSONDecoder().decode(AuthWireErrorBody.self, from: data) else {
+        guard let decoded = try? JSONDecoder().decode(AuthErrorResponse.self, from: data) else {
             return nil
         }
         self = decoded

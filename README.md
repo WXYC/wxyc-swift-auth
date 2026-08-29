@@ -51,6 +51,17 @@ let session = StubAuthRequestSession(.json(#"{"token":"session"}"#, headers: ["s
 let client = AuthWireClient(authBaseURL: url, session: session)
 ```
 
+## Wire types are generated
+
+The auth request/response schemas in `Sources/WXYCAuth/Generated/` are generated from [`wxyc-shared`](https://github.com/WXYC/wxyc-shared)'s `api.yaml` and vendored, pinned by `contract-version.json`. Unlike the app repos, which vendor the whole spec, this package vendors only the auth subset — otherwise a third public copy of every WXYC schema would land in both consumers' dependency graphs.
+
+Don't hand-edit anything under `Generated/`; CI diffs it against a fresh regeneration. See `CLAUDE.md` for the allow-list, the guards, and the two scripted transforms.
+
+```bash
+scripts/regenerate-api-types.sh   # after bumping contract-version.json
+scripts/verify-api-types.sh       # drift check; needs git, npm/node, java, rsync
+```
+
 ## Develop
 
 ```bash
