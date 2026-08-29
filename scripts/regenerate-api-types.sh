@@ -20,6 +20,26 @@
 # AUTH_MODELS_KEEP allow-list, checked against a closure computed from api.yaml
 # itself (see the tripwire discussion below).
 #
+# BE PRECISE ABOUT WHAT THAT SOLVES, BECAUSE IT IS ONLY HALF THE PROBLEM.
+# Subsetting removes the collision for the ~259 schemas this package does NOT
+# vendor. It does NOTHING for the 16 it does. wxyc-dj-ios pins the SAME
+# wxyc-shared commit this package does and vendors the whole tree, so its
+# WXYCAPIModels already declares public AuthUser, AuthSignInResult, OTPType and
+# the other thirteen. The moment WXYCAPI depends on both modules those names
+# exist publicly twice in one graph: a file importing both and naming one gets
+# "ambiguous for type lookup in this context", and a file importing only one
+# binds silently to whichever it can see.
+#
+# The other half lives in dj-ios, and the plan specifies it (the "Auth DTO
+# ownership" row): its regenerate script excludes the auth schemas from its own
+# tree, in the style of its existing HealthCheckResponse drop, so WXYCAuth is
+# the single owner. That exclusion has NOT landed, and its stated trigger --
+# "the first post-Phase-A pin bump or the adoption PR, whichever comes first" --
+# has already gone by unnoticed, since dj-ios's pin is at api.yaml 1.47.0 with
+# the auth models vendored. It is a prerequisite of Phase C adoption, not of
+# this script, but nothing here will detect it: the collision surfaces in the
+# consumer, not in this repo.
+#
 # Usage:
 #   scripts/regenerate-api-types.sh [options]
 #
@@ -416,8 +436,20 @@ log "Demoting Infrastructure/ declarations to internal"
 for f in "$STAGE_DIR/Infrastructure/"*.swift; do
     DEMOTED_TYPES="${(j:|:)INFRA_DEMOTED_TYPES}" perl -i -pe '
         BEGIN { $demoted = qr/^(?:@[\w.:()"\s]+\s+)*extension\s+($ENV{DEMOTED_TYPES})\b/; }
-        if (/^\}/) { $in_demoted_extension = 0; }
-        elsif ($_ =~ $demoted) { $in_demoted_extension = 1; }
+        # A self-closing one-liner (`extension NullEncodable: Sendable where
+        # Wrapped: Sendable {}`) opens and closes on the same line and never
+        # reaches a `^\}`, so it must clear the flag itself. Without this the
+        # flag leaks forward to end of file, and it is only harmless today
+        # because the generator happens to emit the extension on
+        # CaseIterableDefaultsLast ABOVE those one-liners. Reorder them
+        # upstream and its `public init(from:)` -- which the public OTPType
+        # inherits to satisfy the public Decodable -- would be demoted,
+        # breaking the build in exactly the way the narrowness of this
+        # transform exists to avoid, and the column-0 STILL_PUBLIC assertion
+        # cannot see it. (No apostrophes in here: the perl program sits in a
+        # single-quoted zsh string, so one would terminate it.)
+        if (/^\}/)                       { $in_demoted_extension = 0; }
+        elsif ($_ =~ $demoted)           { $in_demoted_extension = /\{\s*\}\s*$/ ? 0 : 1; }
         s/^(public|open) /internal /;
         s/^(\s+)(?:public|open) /$1internal /  if $in_demoted_extension;
     ' "$f"

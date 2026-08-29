@@ -41,7 +41,14 @@ const doc = YAML.parse(readFileSync(join(cloneDir, 'api.yaml'), 'utf8'));
 // WXYCAPIModels tree already carries the DeviceAuth* types. Including them
 // here would put a second public copy of each into that app's dependency
 // graph — the collision this subsetting exists to avoid.
-const isAuthOperationPath = (path) => path.startsWith('/auth/') && !path.startsWith('/auth/device');
+// Segment-matched, NOT a substring prefix. `startsWith('/auth/device')` would
+// also swallow a future `/auth/devices` or `/auth/device-code`, and the
+// consequence is exactly the silent drop this closure exists to make loud: a
+// schema reachable only from such a path never enters the closure, so the
+// two-way AUTH_MODELS_KEEP comparison passes while the type is missing from
+// the vendored tree.
+const isDevicePath = (path) => path === '/auth/device' || path.startsWith('/auth/device/');
+const isAuthOperationPath = (path) => path.startsWith('/auth/') && !isDevicePath(path);
 
 const schemaRefsIn = (node, found) => {
     if (node === null || typeof node !== 'object') return found;

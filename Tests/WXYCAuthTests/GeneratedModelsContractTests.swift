@@ -103,6 +103,70 @@ struct GeneratedModelsContractTests {
         #expect(result.userId == "anon-1")
     }
 
+    // MARK: - The models need the configured decoder
+
+    @Test("AuthUser decodes a date-bearing body in both ISO-8601 forms", arguments: [
+        "2026-08-01T12:00:00Z",
+        "2026-08-01T12:00:00.000Z",
+    ])
+    func authUserDecodesBothTimestampForms(timestamp: String) throws {
+        // Backend-Service emits both forms — the fact wxyc-dj-ios's JSONCoders
+        // was written for. The generator's own OpenISO8601DateFormatter handles
+        // only the second-precision one, so this is not merely restating what
+        // the vendored code already does.
+        let body = """
+        {"id":"u1","email":"dj@wxyc.org","emailVerified":true,"name":"DJ","createdAt":"\(timestamp)","updatedAt":"\(timestamp)"}
+        """
+        let user = try AuthModelCoding.makeJSONDecoder().decode(AuthUser.self, from: Data(body.utf8))
+        #expect(user.createdAt != nil)
+        #expect(user.updatedAt != nil)
+    }
+
+    @Test("a stock JSONDecoder cannot read a date-bearing body, which is why AuthModelCoding exists")
+    func stockDecoderFailsOnDates() {
+        // The negative half. Without it the test above would pass just as well
+        // against a decoder that did nothing, and the reason this package vends
+        // one at all would be invisible. `.deferredToDate` expects a number.
+        let body = """
+        {"id":"u1","email":"dj@wxyc.org","emailVerified":true,"name":"DJ","createdAt":"2026-08-01T12:00:00Z"}
+        """
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(AuthUser.self, from: Data(body.utf8))
+        }
+    }
+
+    @Test("an unparseable timestamp is a decoding error, not a silent nil")
+    func unparseableTimestampThrows() {
+        let body = """
+        {"id":"u1","email":"dj@wxyc.org","emailVerified":true,"name":"DJ","createdAt":"last Tuesday"}
+        """
+        #expect(throws: DecodingError.self) {
+            try AuthModelCoding.makeJSONDecoder().decode(AuthUser.self, from: Data(body.utf8))
+        }
+    }
+
+    // MARK: - The generated request bodies are not what the client sends
+
+    @Test("sign-in sends no rememberMe, though the generated request body would default it to true")
+    func signInBodyOmitsRememberMe() async throws {
+        // EmailSignInRequest.rememberMe is `Bool? = true` and encodes via
+        // encodeIfPresent, so anything that reached for the "official" generated
+        // body — including a future tidy-up of establishSession — would silently
+        // start asking for a longer session, with no compile error to catch it.
+        // Pin what actually goes on the wire.
+        #expect(EmailSignInRequest(email: "dj@wxyc.org", password: "pw").rememberMe == true)
+
+        let session = StubAuthRequestSession([
+            .json(status: 200, #"{"token":"session-abc"}"#, headers: ["set-auth-token": "session-abc"])
+        ])
+        let client = AuthWireClient(authBaseURL: URL(string: "https://api.example.invalid/auth")!, session: session)
+        _ = try await client.signIn(email: "dj@wxyc.org", password: "pw")
+
+        let sent = try #require(session.requests.first?.httpBody)
+        let fields = try #require(try JSONSerialization.jsonObject(with: sent) as? [String: Any])
+        #expect(Set(fields.keys) == ["email", "password"])
+    }
+
     // MARK: - Enum tolerance, and the Infrastructure it depends on
 
     @Test("OTPType decodes an unrecognized value rather than throwing")
