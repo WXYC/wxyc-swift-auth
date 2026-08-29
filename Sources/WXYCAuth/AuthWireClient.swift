@@ -220,7 +220,7 @@ public struct AuthWireClient: Sendable {
         let (data, response) = try await perform(request)
         let sessionToken = capturedSessionToken(header: response, body: data)
         do {
-            let decoded = try JSONDecoder().decode(AnonymousSignInResponse.self, from: data)
+            let decoded = try JSONDecoder().decode(AnonymousSignInBody.self, from: data)
             guard let sessionToken = sessionToken ?? nonEmpty(decoded.token) else {
                 throw AuthWireError.missingSessionToken
             }
@@ -247,7 +247,7 @@ public struct AuthWireClient: Sendable {
         let (data, response) = try await perform(request)
         let token: String
         do {
-            token = try JSONDecoder().decode(TokenResponse.self, from: data).token
+            token = try JSONDecoder().decode(AuthTokenResponse.self, from: data).token
         } catch {
             throw AuthWireError.decoding(error)
         }
@@ -296,7 +296,7 @@ public struct AuthWireClient: Sendable {
         if let header = nonEmpty(response.value(forHTTPHeaderField: "set-auth-token")) {
             return header
         }
-        return nonEmpty(try? JSONDecoder().decode(TokenResponse.self, from: data).token)
+        return nonEmpty(try? JSONDecoder().decode(SessionTokenCarrier.self, from: data).token)
     }
 
     private func nonEmpty(_ value: String?) -> String? {
@@ -357,19 +357,37 @@ public struct AuthWireClient: Sendable {
 
 // MARK: - Wire shapes
 
-private struct TokenResponse: Decodable {
+/// Plucks `token` out of whichever 2xx body arrived, for the header-fallback
+/// path in ``AuthWireClient/capturedSessionToken(header:body:)``.
+///
+/// Deliberately **not** one of the generated schemas, and not a candidate to
+/// become one. Three different declared bodies can reach that fallback —
+/// `AuthSignInResult` (the password routes), `AuthTokenAndUserResult` (OTP and
+/// anonymous), and `AuthTokenResponse` — so decoding any single one of them
+/// would reject the other two on their required fields, which is the opposite
+/// of what a fallback is for. This carrier asks the one question the fallback
+/// actually has: is there a `token` here?
+private struct SessionTokenCarrier: Decodable {
     let token: String
 }
 
-private struct AnonymousSignInResponse: Decodable {
+/// The anonymous sign-in body, read for the two fields this client surfaces.
+///
+/// Deliberately **not** the generated ``AuthTokenAndUserResult``, and this one
+/// is a judgment call rather than a gap in the contract. That schema embeds the
+/// full ``AuthUser``, which declares `email`, `emailVerified` and `name`
+/// required — so decoding it would make anonymous sign-in fail outright over
+/// fields ``AnonymousSignInResult`` does not expose and no caller reads.
+/// Anonymous sign-in is wxyc-ios-64's cold-start path, run on every launch, and
+/// its existing client reads exactly these two fields and ignores the rest; the
+/// shared package must not be the thing that turns a benign upstream field
+/// change into a launch failure. Revisit if ``AnonymousSignInResult`` ever grows
+/// a reason to carry the whole user.
+private struct AnonymousSignInBody: Decodable {
     struct User: Decodable {
         let id: String
     }
 
     let token: String?
     let user: User
-}
-
-private struct LookupEmailResponse: Decodable {
-    let email: String?
 }

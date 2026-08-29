@@ -1,0 +1,99 @@
+name: Verify API Types
+
+# Drift check for the vendored Sources/WXYCAuth/Generated tree: fails a PR whose
+# committed tree does not match a fresh regen from the wxyc-shared commit pinned
+# in contract-version.json.
+#
+# Because this package vendors a SUBSET rather than the whole generated tree,
+# the byte-for-byte diff is doing more work here than the equivalent check does
+# in the app repos: it is what proves the AUTH_MODELS_KEEP allow-list, the
+# Infrastructure curation, the RequestTask strip and the access-level demotion
+# are all reproducible, and that nobody widened the subset by hand.
+#
+# Runs on ubuntu-latest, not macos: it needs none of the things that keep ci.yml
+# on macOS -- no Xcode, no simulator -- and wxyc-shared is public, so the clone
+# needs no credentials either (overridden below to the https remote so an
+# unauthenticated runner can clone it; the script's default remote is SSH).
+#
+# Path-filtered to the vendored tree, the pin, this workflow's own path, AND the
+# three scripts that constitute the check -- an edit to any of them must not
+# merge without the gate proving itself against the result.
+#
+# The push trigger exists because pull_request only re-runs on head pushes: a
+# base-branch advance recomputes the merge commit without re-triggering, so two
+# individually-green PRs can merge into a drifted main with nothing red
+# anywhere. The main-side run catches that within one merge.
+#
+# There is deliberately NO schedule trigger. The pin is a fixed SHA and this
+# only ever regenerates from it, so a newer api.yaml upstream sits unnoticed
+# until someone bumps the pin -- which is the point. Bumping the pin is when a
+# human re-runs the generated-vs-hand-written evaluation, and that should not
+# happen unreviewed on a cron.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "Sources/WXYCAuth/Generated/**"
+      - "contract-version.json"
+      - "scripts/regenerate-api-types.sh"
+      - "scripts/verify-api-types.sh"
+      - "scripts/auth-schema-closure.mjs"
+      - ".github/workflows/verify-api-types.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Sources/WXYCAuth/Generated/**"
+      - "contract-version.json"
+      - "scripts/regenerate-api-types.sh"
+      - "scripts/verify-api-types.sh"
+      - "scripts/auth-schema-closure.mjs"
+      - ".github/workflows/verify-api-types.yml"
+  workflow_dispatch:
+
+# This job runs unvetted third-party code -- npm ci over wxyc-shared's full
+# dev-dependency tree with lifecycle scripts enabled, plus a JAR fetched from
+# Maven Central by openapi-generator-cli -- so it must never see a writable
+# token. Read-only contents is all a diff check needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-api-types-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify-api-types:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # The job needs no git credentials after checkout (the wxyc-shared
+          # clone is anonymous https; the check is a git diff --no-index), so
+          # don't leave the token sitting in .git/config for the third-party
+          # install scripts above to read.
+          persist-credentials: false
+
+      # The scripts are zsh, matching the app repos' own codegen scripts.
+      - name: Install zsh
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # wxyc-shared declares engines.node >=24 and pins 24 in its own
+          # workflows; pin here too so the regen doesn't float on whatever
+          # node the runner image ships.
+          node-version: "24"
+
+      - name: verify-api-types.sh
+        run: zsh scripts/verify-api-types.sh --remote https://github.com/WXYC/wxyc-shared.git
