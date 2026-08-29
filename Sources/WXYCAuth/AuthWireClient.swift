@@ -196,7 +196,7 @@ public struct AuthWireClient: Sendable {
         ))
         let response: LookupEmailResponse
         do {
-            response = try JSONDecoder().decode(LookupEmailResponse.self, from: data)
+            response = try AuthModelCoding.makeJSONDecoder().decode(LookupEmailResponse.self, from: data)
         } catch {
             throw AuthWireError.decoding(error)
         }
@@ -247,7 +247,7 @@ public struct AuthWireClient: Sendable {
         let (data, response) = try await perform(request)
         let token: String
         do {
-            token = try JSONDecoder().decode(AuthTokenResponse.self, from: data).token
+            token = try AuthModelCoding.makeJSONDecoder().decode(AuthTokenResponse.self, from: data).token
         } catch {
             throw AuthWireError.decoding(error)
         }

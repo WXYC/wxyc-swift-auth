@@ -77,7 +77,7 @@ Test fixtures use WXYC-representative artists — Juana Molina, Jessica Pratt, C
 
 | Repo | Layer that imports this | Status |
 |---|---|---|
-| `wxyc-dj-ios` | `Packages/WXYCAPI` | Phase C — not yet adopted |
+| `wxyc-dj-ios` | `Packages/WXYCAPI` | Phase C — not yet adopted. **Blocked on dj-ios excluding the 16 auth schemas from its own vendored tree first** — see "Code generation"; both trees declare them publicly today. |
 | `wxyc-ios-64` | `Shared/MusicShareKit` | Phase D2 — not yet adopted |
 
 Apps import `WXYCAuth` **from their networking layers, never from app-layer UI code** — the same rule dj-ios applies to `WXYCAPIModels`.
@@ -105,6 +105,10 @@ Needs `git`, `npm`/`node`, `java` (the generator runs on the JVM) and `rsync`. A
 
 The 16 are exactly the transitive `$ref` closure of api.yaml's **non-device** `/auth/*` operations. The device-authorization (QR) surface is a documented non-goal — dj-ios is its sole consumer and already vendors its own `DeviceAuth*` types.
 
+**Be precise about what subsetting solves, because it is only half the problem.** It removes the collision for the ~259 schemas this package does *not* vendor. It does nothing for the 16 it does. `wxyc-dj-ios` pins the **same** `wxyc-shared` commit this package does and vendors the whole tree, so its `WXYCAPIModels` already declares public `AuthUser`, `AuthSignInResult`, `OTPType` and the rest. The moment `WXYCAPI` depends on both modules, those names exist publicly twice in one graph — a file importing both and naming one gets `ambiguous for type lookup in this context`, and a file importing only one binds silently to whichever it can see.
+
+The other half lives in dj-ios, and the plan specifies it (the "Auth DTO ownership" row): **its** regenerate script excludes the auth schemas from **its** tree, in the style of its existing `HealthCheckResponse` drop, leaving `WXYCAuth` the single owner. That exclusion has not landed, and its stated trigger — "the first post-Phase-A pin bump or the adoption PR, whichever comes first" — has already gone by unnoticed, since dj-ios's pin is at api.yaml 1.47.0 with the auth models vendored. **Treat it as a prerequisite of Phase C adoption.** Nothing in this repo will catch it: the ambiguity surfaces in the consumer's build, not here.
+
 | Vendored | What it is |
 |---|---|
 | `AuthErrorResponse` | better-auth's `{message, code}`. Aliased as `AuthWireErrorBody`, plus an extension carrying `init?(decoding:)`. |
@@ -116,6 +120,12 @@ The 16 are exactly the transitive `$ref` closure of api.yaml's **non-device** `/
 | `AuthUser` | The shared `user` block. Requires `email`, `emailVerified`, `name`. |
 | `LookupEmailRequest` / `LookupEmailResponse` | WXYC's own lookup route. `email` is nullable — a no-match is a well-formed rejection. |
 | `EmailSignInRequest`, `UsernameSignInRequest`, `OTPSignInRequest`, `SendLoginCodeRequest`, `OTPType` | Request bodies and the named enum `SendLoginCodeRequest.type` carries. |
+
+### The models need `AuthModelCoding.makeJSONDecoder()`, not a bare `JSONDecoder()`
+
+`AuthUser` — which every sign-in response embeds — carries `createdAt`, `updatedAt` and `banExpires` as `Date?`. A stock `JSONDecoder()` uses `.deferredToDate`, which expects a number, so it fails on a real response with `typeMismatch … Expected to decode Double but found a string instead`. The generator's own `OpenISO8601DateFormatter` doesn't rescue it either: it is a fixed `yyyy-MM-dd'T'HH:mm:ssZZZZZ` with **no fractional-seconds branch**, and Backend-Service emits both forms.
+
+So the package vends a decoder that tries fractional seconds then plain, and the tests pin **both** — plus the negative case, so the positive tests can't pass against a decoder that does nothing. Use it for anything under `Generated/`. `JWTClaims` deliberately stays on a plain decoder: its `exp` is hand-coded inside its own `init(from:)`, so no date strategy applies.
 
 ### Three hand-written shapes survive, each for a checked reason
 

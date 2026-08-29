@@ -80,7 +80,7 @@ extension AuthErrorResponse {
     /// fails to decode, rather than arriving as an all-`nil` value that reads
     /// like a successfully-parsed better-auth error.
     public init?(decoding data: Data) {
-        guard let decoded = try? JSONDecoder().decode(AuthErrorResponse.self, from: data) else {
+        guard let decoded = try? AuthModelCoding.makeJSONDecoder().decode(AuthErrorResponse.self, from: data) else {
             return nil
         }
         self = decoded
