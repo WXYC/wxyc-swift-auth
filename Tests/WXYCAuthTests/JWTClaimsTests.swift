@@ -52,11 +52,14 @@ struct JWTDecoderTests {
     /// Each JSON length below lands on a different `count % 4` for the encoded
     /// segment, so between them they exercise every re-padding branch. A
     /// decoder that skips padding fails on three of the four.
+    // `email` is required, so these carry one; the four `sub` lengths still
+    // differ by a byte each, which is what keeps all four padding remainders
+    // covered.
     @Test("base64url payloads decode at every padding remainder", arguments: [
-        #"{"exp":1800000000,"sub":"a"}"#,
-        #"{"exp":1800000000,"sub":"ab"}"#,
-        #"{"exp":1800000000,"sub":"abc"}"#,
-        #"{"exp":1800000000,"sub":"abcd"}"#,
+        #"{"exp":1800000000,"email":"dj@wxyc.org","sub":"a"}"#,
+        #"{"exp":1800000000,"email":"dj@wxyc.org","sub":"ab"}"#,
+        #"{"exp":1800000000,"email":"dj@wxyc.org","sub":"abc"}"#,
+        #"{"exp":1800000000,"email":"dj@wxyc.org","sub":"abcd"}"#,
     ])
     func paddingRemainders(json: String) throws {
         let claims = try JWTDecoder.decode(makeJWT(payloadJSON: json))
@@ -67,17 +70,40 @@ struct JWTDecoderTests {
     func urlSafeAlphabet() throws {
         // "ÿÿ>" and "?" round-trip through the + and / positions of the
         // standard alphabet, so a decoder that forgets the substitution fails.
-        let json = #"{"exp":1800000000,"sub":"\#(String("ÿÿ>?"))"}"#
+        let json = #"{"exp":1800000000,"email":"dj@wxyc.org","sub":"\#(String("ÿÿ>?"))"}"#
         let claims = try JWTDecoder.decode(makeJWT(payloadJSON: json))
         #expect(claims.sub == "ÿÿ>?")
     }
 
-    @Test("optional claims are absent-tolerant; exp is required")
+    @Test("sub and role are absent-tolerant; email and exp are required")
     func optionalClaims() throws {
-        let claims = try JWTDecoder.decode(makeJWT(payloadJSON: #"{"exp":1800000000}"#))
+        let json = #"{"exp":1800000000,"email":"dj@wxyc.org"}"#
+        let claims = try JWTDecoder.decode(makeJWT(payloadJSON: json))
         #expect(claims.sub == nil)
-        #expect(claims.email == nil)
         #expect(claims.role == nil)
+        // Typed `String`, not inferred: this binding stops compiling if
+        // `email` is ever relaxed back to `String?`, which is the whole of
+        // what its non-optionality buys a caller. A value assertion cannot
+        // tell the two types apart.
+        let email: String = claims.email
+        #expect(email == "dj@wxyc.org")
+    }
+
+    /// Backend-Service cannot omit this claim — `buildJwtPayload` spreads
+    /// better-auth's user record, where `email` is a required column, and the
+    /// anonymous plugin synthesizes an address rather than leaving it out — so
+    /// a token without a usable one is refused here instead of handing every
+    /// caller a `nil`. Both shapes are covered because an omitted claim and an
+    /// explicit `null` are different wire facts that `decodeIfPresent` used to
+    /// collapse into the same value.
+    @Test("a token with no usable email claim is .payloadDecodeFailed", arguments: [
+        #"{"exp":1800000000,"sub":"dj-42","role":"dj"}"#,
+        #"{"exp":1800000000,"sub":"dj-42","email":null,"role":"dj"}"#,
+    ])
+    func emailIsRequired(json: String) {
+        #expect(throws: JWTDecodeError.payloadDecodeFailed) {
+            try JWTDecoder.decode(makeJWT(payloadJSON: json))
+        }
     }
 
     @Test("all four claims are read")
@@ -113,7 +139,7 @@ struct JWTClaimsCodingTests {
 
     @Test("exp encodes as epoch seconds, not an ISO-8601 string")
     func expEncodesAsEpochSeconds() throws {
-        let claims = JWTClaims(sub: nil, email: nil, role: nil, exp: Date(timeIntervalSince1970: 1_800_000_000))
+        let claims = JWTClaims(sub: nil, email: "dj@wxyc.org", role: nil, exp: Date(timeIntervalSince1970: 1_800_000_000))
         let json = try JSONEncoder().encode(claims)
         let object = try #require(try JSONSerialization.jsonObject(with: json) as? [String: Any])
         #expect(object["exp"] as? TimeInterval == 1_800_000_000)
@@ -126,14 +152,14 @@ struct JWTClaimsCodingTests {
     func expIgnoresEncoderDateStrategy() throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let claims = JWTClaims(sub: nil, email: nil, role: nil, exp: Date(timeIntervalSince1970: 1_800_000_000))
+        let claims = JWTClaims(sub: nil, email: "dj@wxyc.org", role: nil, exp: Date(timeIntervalSince1970: 1_800_000_000))
         let object = try JSONSerialization.jsonObject(with: try encoder.encode(claims)) as? [String: Any]
         #expect(object?["exp"] as? TimeInterval == 1_800_000_000)
     }
 
     @Test("round-trips through encode and decode")
     func roundTrip() throws {
-        let claims = JWTClaims(sub: "dj-42", email: nil, role: "dj", exp: Date(timeIntervalSince1970: 1_800_000_000))
+        let claims = JWTClaims(sub: "dj-42", email: "dj@wxyc.org", role: "dj", exp: Date(timeIntervalSince1970: 1_800_000_000))
         let decoded = try JSONDecoder().decode(JWTClaims.self, from: try JSONEncoder().encode(claims))
         #expect(decoded == claims)
     }

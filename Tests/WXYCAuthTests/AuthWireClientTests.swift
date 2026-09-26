@@ -19,10 +19,11 @@ import WXYCAuthTesting
 
 private let authBaseURL = URL(string: "https://api.wxyc.test/auth")!
 
-/// A JWT whose payload is `{"sub":"dj-42","exp":1800000000}`, unpadded
-/// base64url — the encoding a real provider emits.
+/// A JWT whose payload is `{"sub":"dj-42","email":"dj@wxyc.org","exp":1800000000}`,
+/// unpadded base64url — the encoding a real provider emits. `mintJWT` decodes
+/// these claims, so the payload has to carry the required `email`.
 private let sampleJWT: String = {
-    let payload = Data(#"{"sub":"dj-42","exp":1800000000}"#.utf8).base64EncodedString()
+    let payload = Data(#"{"sub":"dj-42","email":"dj@wxyc.org","exp":1800000000}"#.utf8).base64EncodedString()
         .replacingOccurrences(of: "+", with: "-")
         .replacingOccurrences(of: "/", with: "_")
         .replacingOccurrences(of: "=", with: "")
