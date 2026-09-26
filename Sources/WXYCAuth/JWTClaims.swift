@@ -14,9 +14,35 @@ import Foundation
 
 /// The payload claims Backend-Service issues, as both consumers read them.
 ///
-/// Every field but `exp` is optional because the two consumers read disjoint
-/// subsets — wxyc-dj-ios reads `sub`/`email`/`role`, wxyc-ios-64 reads `exp`
-/// alone — and an anonymous session carries neither an email nor a role.
+/// `sub` and `role` are optional; `email` and `exp` are not.
+///
+/// The consumers do read disjoint subsets — wxyc-dj-ios reads
+/// `sub`/`email`/`role`, wxyc-ios-64 reads `exp` alone — but a claim going
+/// unread is a reason to tolerate its *absence* only where the server can
+/// actually omit it. For `email` it cannot: Backend-Service's `definePayload`
+/// is `buildJwtPayload(user, …)`, which spreads better-auth's user record into
+/// the payload, and `email` is a required column there. **An anonymous session
+/// is not the exception it looks like** — better-auth's anonymous plugin
+/// synthesizes `temp-<id>@anonymous.wxyc.org` whenever `emailDomainName` is
+/// set, which `auth.definition.ts` sets, so ios-64's cold-start path carries
+/// one too. (An earlier revision of this comment claimed the opposite and used
+/// it to justify the optionality; it was wrong about `email` and right only
+/// about `role`.) A token without the claim is therefore not a session either
+/// app can represent, and decoding it to a `nil` pushes that hole into every
+/// caller instead of refusing it at the boundary.
+///
+/// `role`'s optionality is the load-bearing one, and it *is* about a genuinely
+/// absent claim: the same `buildJwtPayload` sets it only when the `auth_member`
+/// lookup returns a row, so a user with no membership has no role claim at all.
+///
+/// Two costs follow from requiring `email`, both accepted. A token missing it
+/// fails the *whole* decode, which both consumers' JWT legs treat as transient
+/// and re-mintable (dj-ios's issue-#53 pending window), so it defers a JWT
+/// rather than signing anyone out. And because this type is also an at-rest
+/// format (below), a dj-ios grace anchor persisted without the claim stops
+/// decoding, costing that install one offline cold-launch restore; every anchor
+/// written from a real server token carries it, so that is expected to be
+/// unreachable in practice.
 ///
 /// **`exp`'s coding is hand-written on purpose, and must stay that way.**
 /// wxyc-dj-ios persists this JSON into the Keychain as its issue-#57 offline
@@ -28,7 +54,7 @@ import Foundation
 /// `exp` by hand as epoch seconds pins the format to this file.
 public struct JWTClaims: Codable, Sendable, Equatable {
     public let sub: String?
-    public let email: String?
+    public let email: String
     public let role: String?
     public let exp: Date
 
@@ -38,7 +64,7 @@ public struct JWTClaims: Codable, Sendable, Equatable {
     /// neither a property nor an initializer.
     public var expiration: Date { exp }
 
-    public init(sub: String?, email: String?, role: String?, exp: Date) {
+    public init(sub: String?, email: String, role: String?, exp: Date) {
         self.sub = sub
         self.email = email
         self.role = role
@@ -52,7 +78,7 @@ public struct JWTClaims: Codable, Sendable, Equatable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         sub = try container.decodeIfPresent(String.self, forKey: .sub)
-        email = try container.decodeIfPresent(String.self, forKey: .email)
+        email = try container.decode(String.self, forKey: .email)
         role = try container.decodeIfPresent(String.self, forKey: .role)
         exp = Date(timeIntervalSince1970: try container.decode(TimeInterval.self, forKey: .exp))
     }
@@ -60,7 +86,7 @@ public struct JWTClaims: Codable, Sendable, Equatable {
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(sub, forKey: .sub)
-        try container.encodeIfPresent(email, forKey: .email)
+        try container.encode(email, forKey: .email)
         try container.encodeIfPresent(role, forKey: .role)
         try container.encode(exp.timeIntervalSince1970, forKey: .exp)
     }
